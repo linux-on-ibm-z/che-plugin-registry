@@ -23,4 +23,11 @@ export SCRIPT_DIR
 load_jenkins_vars
 install_deps
 set_release_tag
-build_and_push
+
+check_buildx_support
+export check=$?
+if [[ $check = 0 ]]; then
+     build_and_push_using_buildx
+else
+     build_and_push
+fi

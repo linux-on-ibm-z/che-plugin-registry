@@ -129,8 +129,8 @@ function build_and_push() {
   fi
   
   # Create a new builder instance using buildx  
-  docker buildx create --name devfile_builder
-  docker buildx use devfile_builder
+  docker buildx create --name plugin_builder
+  docker buildx use plugin_builder
   docker buildx inspect --bootstrap
   docker buildx ls
 

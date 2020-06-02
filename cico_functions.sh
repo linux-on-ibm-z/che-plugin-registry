@@ -47,6 +47,37 @@ function install_deps() {
 
   service docker start
   echo 'CICO: Dependencies installed'
+  
+  export DOCKER_BUILD_KIT=1
+  export DOCKER_CLI_EXPERIMENTAL=enabled
+
+  docker_version="$(docker --version | cut -d' ' -f3 | tr -cd '0-9.')"
+  if [[ "$(version "$docker_version")" < "$(version '19.03')" ]]; then
+    echo "Docker $docker_version greater than or equal to 19.03 is required."
+  fi
+
+  docker_experimental="$(docker version | \
+                         awk '/^ *Experimental:/ {print $2 ; exit}')"
+  if [[ "$docker_experimental" != 'true' ]]; then
+    echo "Docker experimental flag not enabled:"\
+          "Set with 'export DOCKER_CLI_EXPERIMENTAL=enabled'"
+  else
+    echo "Docker $docker_version supports buildx experimental feature."
+  fi
+
+  # Kernel
+  kernel_version="$(uname -r)"
+  if [[ "$(version "$kernel_version")" < "$(version '4.8')" ]]; then
+    echo "Kernel $kernel_version too old - need >= 4.8." \
+          " Install a newer kernel."
+    exit 1
+  else
+    echo "kernel $kernel_version has binfmt_misc fix-binary (F) support."
+  fi
+
+  #Enable qemu and binfmt support
+  docker run --rm --privileged docker/binfmt:66f9012c56a8316f9244ffd7622d7c21c1f6f28d
+  docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 }
 
 function set_release_tag() {
@@ -96,16 +127,22 @@ function build_and_push() {
   else
     echo "Could not login, missing credentials for pushing to the '${ORGANIZATION}' organization"
   fi
+  
+  # Create a new builder instance using buildx  
+  docker buildx create --name devfile_builder
+  docker buildx use devfile_builder
+  docker buildx inspect --bootstrap
+  docker buildx ls
 
-  # Let's build and push image to 'quay.io' using git commit hash as tag first
   set_git_commit_tag
-  docker build -t ${IMAGE} -f ./build/dockerfiles/${DOCKERFILE} --target registry . | cat
-  tag_push "${REGISTRY}/${ORGANIZATION}/${IMAGE}:${GIT_COMMIT_TAG}"
-  echo "CICO: '${GIT_COMMIT_TAG}' version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
-
-  # If additional tag is set (e.g. "nightly"), let's tag the image accordingly and also push to 'quay.io'
+  
+  # If additional tag is set (e.g. "nightly"), let's build the image accordingly and also push to 'quay.io'
   if [ -n "${TAG}" ]; then
-    tag_push "${REGISTRY}/${ORGANIZATION}/${IMAGE}:${TAG}"
+    docker buildx build --platform=linux/amd64,linux/s390x -t ${REGISTRY}/${ORGANIZATION}/${IMAGE}:${TAG} -f ./build/dockerfiles/${DOCKERFILE} --target registry . --push --progress plain --no-cache
     echo "CICO: '${TAG}'  version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
+  else
+    # Let's build and push image to 'quay.io' using git commit hash as tag first 
+    docker buildx build --platform=linux/amd64,linux/s390x -t ${REGISTRY}/${ORGANIZATION}/${IMAGE}:${GIT_COMMIT_TAG} -f ./build/dockerfiles/${DOCKERFILE} --target registry . --push --progress plain --no-cache
+    echo "CICO: '${GIT_COMMIT_TAG}' version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
   fi
 }

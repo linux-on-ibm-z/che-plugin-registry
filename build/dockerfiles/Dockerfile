@@ -11,7 +11,9 @@
 #
 
 # Builder: check meta.yamls and create index.json
-FROM docker.io/alpine:3.11.5 AS builder
+FROM --platform=$TARGETPLATFORM docker.io/alpine:3.11.5 AS builder
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 RUN apk add --no-cache py-pip jq bash wget skopeo && pip install yq jsonschema
 
 ARG LATEST_ONLY=false
@@ -34,7 +36,7 @@ RUN ./list_referenced_images.sh v3 > /build/v3/external_images.txt
 RUN chmod -R g+rwX /build
 
 # Build registry, copying meta.yamls and index.json from builder
-FROM docker.io/httpd:2.4.43-alpine AS registry
+FROM --platform=$TARGETPLATFORM docker.io/httpd:2.4.43-alpine AS registry
 # Allow htaccess
 RUN sed -i 's|    AllowOverride None|    AllowOverride All|' /usr/local/apache2/conf/httpd.conf && \
     sed -i 's|Listen 80|Listen 8080|' /usr/local/apache2/conf/httpd.conf && \

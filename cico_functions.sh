@@ -49,6 +49,48 @@ function install_deps() {
   echo 'CICO: Dependencies installed'
 }
 
+function check_buildx_support() {
+  export DOCKER_BUILD_KIT=1
+  export DOCKER_CLI_EXPERIMENTAL=enabled
+
+  docker_version="$(docker --version | cut -d' ' -f3 | tr -cd '0-9.')"
+  if [[ $docker_version < 19.03 ]]; then
+    echo "CICO: Docker $docker_version greater than or equal to 19.03 is required."
+  fi
+
+  docker_experimental="$(docker version | \
+                         awk '/^ *Experimental:/ {print $2 ; exit}')"
+  if [[ "$docker_experimental" != 'true' ]]; then
+    echo "CICO: Docker experimental flag not enabled:"\
+          "Set with 'export DOCKER_CLI_EXPERIMENTAL=enabled'"
+  else
+    echo "CICO: Docker $docker_version supports buildx experimental feature."
+  fi
+
+  # Kernel
+  kernel_version="$(uname -r | cut -c 1-4)"
+  if [[ $kernel_version < 4.8 ]]; then
+    echo "CICO: Kernel $kernel_version too old - need >= 4.8." \
+          " Install a newer kernel."
+  else
+    echo "CICO: kernel $kernel_version has binfmt_misc fix-binary (F) support."
+  fi
+
+  #Enable qemu and binfmt support
+  docker run --rm --privileged docker/binfmt:66f9012c56a8316f9244ffd7622d7c21c1f6f28d
+  docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+  if [[ "$?" = "0" ]]; then
+    echo "CICO: Prerequisites to run buildx are satisfied."
+    buildx=0
+  else
+    echo "CICO: Going ahead without buildx."
+    buildx=1
+  fi
+
+  return "$buildx"
+}
+
 function set_release_tag() {
   # Let's obtain the tag based on the 
   # version defined in the 'VERSION' file
@@ -107,5 +149,53 @@ function build_and_push() {
   if [ -n "${TAG}" ]; then
     tag_push "${REGISTRY}/${ORGANIZATION}/${IMAGE}:${TAG}"
     echo "CICO: '${TAG}'  version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
+  fi
+}
+
+
+function build_and_push_using_buildx() {
+  TARGET=${TARGET:-"centos"}
+  REGISTRY="quay.io"
+
+  if [ "$TARGET" == "rhel" ]; then
+    DOCKERFILE="rhel.Dockerfile"
+    ORGANIZATION="openshiftio"
+    IMAGE="rhel-che-plugin-registry"
+  else
+    DOCKERFILE="Dockerfile"
+    ORGANIZATION="eclipse"
+    IMAGE="che-plugin-registry"
+    # For pushing to quay.io 'eclipse' organization we need to use different credentials
+    QUAY_USERNAME=${QUAY_ECLIPSE_CHE_USERNAME}
+    QUAY_PASSWORD=${QUAY_ECLIPSE_CHE_PASSWORD}
+  fi
+
+  if [ -n "${QUAY_USERNAME}" ] && [ -n "${QUAY_PASSWORD}" ]; then
+    docker login -u "${QUAY_USERNAME}" -p "${QUAY_PASSWORD}" "${REGISTRY}"
+  else
+    echo "Could not login, missing credentials for pushing to the '${ORGANIZATION}' organization"
+  fi
+  
+  docker buildx ls | grep plugin_builder
+  if [[ "$?" = "0" ]]; then
+    docker buildx rm plugin_builder
+  fi
+  
+  # Create a new builder instance using buildx  
+  docker buildx create --name plugin_builder
+  docker buildx use plugin_builder
+  docker buildx inspect --bootstrap
+  docker buildx ls
+
+  set_git_commit_tag
+  
+  # If additional tag is set (e.g. "nightly"), let's build the image accordingly and also push to 'quay.io'
+  if [ -n "${TAG}" ]; then
+    docker buildx build --platform=linux/amd64,linux/s390x -t ${REGISTRY}/${ORGANIZATION}/${IMAGE}:${TAG} -f ./build/dockerfiles/${DOCKERFILE} --target registry . --push --progress plain --no-cache
+    echo "CICO: '${TAG}'  version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
+  else
+    # Let's build and push image to 'quay.io' using git commit hash as tag first 
+    docker buildx build --platform=linux/amd64,linux/s390x -t ${REGISTRY}/${ORGANIZATION}/${IMAGE}:${GIT_COMMIT_TAG} -f ./build/dockerfiles/${DOCKERFILE} --target registry . --push --progress plain --no-cache
+    echo "CICO: '${GIT_COMMIT_TAG}' version of images pushed to '${REGISTRY}/${ORGANIZATION}' organization"
   fi
 }

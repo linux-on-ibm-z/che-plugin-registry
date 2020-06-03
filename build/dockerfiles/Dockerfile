@@ -12,8 +12,6 @@
 
 # Builder: check meta.yamls and create index.json
 FROM --platform=$TARGETPLATFORM docker.io/alpine:3.11.5 AS builder
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
 RUN apk add --no-cache py-pip jq bash wget skopeo && pip install yq jsonschema
 
 ARG LATEST_ONLY=false

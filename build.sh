@@ -17,6 +17,9 @@ DOCKERFILE="./build/dockerfiles/Dockerfile"
 BUILD_FLAGS=""
 SKIP_OCI_IMAGE="false"
 NODE_BUILD_OPTIONS="${NODE_BUILD_OPTIONS:-}"
+BUILDX="false"
+PLATFORM=""
+PR_CHECK="false"
 
 USAGE="
 Usage: ./build.sh [OPTIONS]
@@ -36,6 +39,12 @@ Options:
         Build using the rhel.Dockerfile (UBI images) instead of default
     --skip-oci-image
         Build artifacts but do not create the image
+    --buildx
+        Build using buildx in GH actions
+    --platform
+        Pass the platform on which image is to be built using GH actions
+    --pr-check
+        Build image for image-build-pr-check GH actions workflow
 "
 
 function print_usage() {
@@ -68,6 +77,18 @@ function parse_arguments() {
             ;;
             --rhel)
             DOCKERFILE="./build/dockerfiles/rhel.Dockerfile"
+            shift;
+            ;;
+            --buildx)
+            BUILDX="true"
+            shift;
+            ;;
+            -p|--platform)
+            PLATFORM=$2
+            shift; shift;
+            ;;
+            --pr-check)
+            PR_CHECK="true"
             shift
             ;;
             *)
@@ -117,9 +138,26 @@ if [ "${SKIP_OCI_IMAGE}" != "true" ]; then
             BUILD_COMMAND="bud"
         fi
     fi
-    echo "Building with $BUILDER $BUILD_COMMAND"
-    IMAGE="${REGISTRY}/${ORGANIZATION}/che-plugin-registry:${TAG}"
-    VERSION=$(head -n 1 VERSION)
-    echo "Building che plugin registry ${VERSION}."
-    ${BUILDER} ${BUILD_COMMAND} -t "${IMAGE}" -f "${DOCKERFILE}" .
+    
+    if [[ "${BUILDX}" != "true" ]]; then
+        echo "Building with $BUILDER $BUILD_COMMAND"
+        IMAGE="${REGISTRY}/${ORGANIZATION}/che-plugin-registry:${TAG}"
+        VERSION=$(head -n 1 VERSION)
+        echo "Building che plugin registry ${VERSION}."
+        ${BUILDER} ${BUILD_COMMAND} -t "${IMAGE}" -f "${DOCKERFILE}" .
+    else
+        if [[ $PR_CHECK != "true" ]]; then
+            echo "Building with $BUILDER buildx"
+            IMAGE="${REGISTRY}/${ORGANIZATION}/che-plugin-registry:${TAG}-$PLATFORM"
+            VERSION=$(head -n 1 VERSION)
+            echo "Building che plugin registry ${VERSION}."
+            ${BUILDER} buildx ${BUILD_COMMAND} -t "${IMAGE}" --platform "$PLATFORM" -f "${DOCKERFILE}" --push .
+        else 
+            echo "Building with $BUILDER buildx"
+            IMAGE="${REGISTRY}/${ORGANIZATION}/che-plugin-registry:${TAG}-$PLATFORM"
+            VERSION=$(head -n 1 VERSION)
+            echo "Building che plugin registry ${VERSION}."
+            ${BUILDER} buildx ${BUILD_COMMAND} -t "${IMAGE}" --platform "$PLATFORM" -f "${DOCKERFILE}" --load .
+        fi
+    fi
 fi

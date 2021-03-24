@@ -16,7 +16,9 @@ jobs:
     strategy:
       matrix:
         dist: [ 'alpine', 'rhel' ]
+        arch: [amd64,ppc64le,s390x]
     runs-on: ubuntu-20.04
+    continue-on-error: true
     steps:
     - name: Clone source code
       uses: actions/checkout@v2
@@ -25,6 +27,10 @@ jobs:
     - uses: actions/setup-node@v1
       with:
         node-version: '12'
+    - name: "Set up QEMU"
+      uses: docker/setup-qemu-action@v1
+    - name: "Set up Docker Buildx ${{ matrix.arch }}"
+      uses: docker/setup-buildx-action@v1
     - name: Get yarn cache directory path
       id: yarn-cache-dir-path
       run: echo "::set-output name=dir::$(yarn cache dir)"
@@ -56,24 +62,24 @@ jobs:
         export SKIP_TEST=true
         if [[ "${{matrix.dist}}" == "alpine" ]]; then
           docker pull quay.io/eclipse/che-plugin-registry:nightly
-          BUILDER=docker ./build.sh --tag pr-check
+          BUILDER=docker ./build.sh --tag pr-check --platform ${{ matrix.arch }} --buildx --pr-check
           EXPORTED_FOLDER=/usr/local/apache2/htdocs/v3
         elif [[ "${{matrix.dist}}" == "rhel" ]]; then
-          BUILDER=docker ./build.sh --rhel --tag pr-check
+          BUILDER=docker ./build.sh --rhel --tag pr-check --platform ${{ matrix.arch }} --buildx --pr-check
           EXPORTED_FOLDER=/var/www/html/v3
         fi
         ls -la output/
-        docker run --rm --entrypoint=sh quay.io/eclipse/che-plugin-registry:pr-check -c "ls -la ${EXPORTED_FOLDER}"
-        docker create --name pluginRegistry quay.io/eclipse/che-plugin-registry:pr-check sh
+        docker run --rm --entrypoint=sh quay.io/eclipse/che-plugin-registry:pr-check-${{ matrix.arch }} -c "ls -la ${EXPORTED_FOLDER}"
+        docker create --name pluginRegistry quay.io/eclipse/che-plugin-registry:pr-check-${{ matrix.arch }} sh
         mkdir root-dir
         docker cp pluginRegistry:${EXPORTED_FOLDER} root-dir/v3
         docker rm -f pluginRegistry
         cp root-dir/v3/plugins/index.json root-dir/index.json
-        tar zcvf content-${{matrix.dist}}.tgz -C root-dir .
+        tar zcvf content-${{matrix.dist}}-${{ matrix.arch }}.tgz -C root-dir .
     - uses: actions/upload-artifact@v2
       with:
         name: plugin-registry-content-${{matrix.dist}}
-        path: content-${{matrix.dist}}.tgz
+        path: content-${{matrix.dist}}-${{ matrix.arch }}.tgz
   pull-request-info:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-20.04

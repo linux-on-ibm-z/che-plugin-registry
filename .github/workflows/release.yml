@@ -20,14 +20,27 @@ on:
         required: false
         default: 'false'
 
+env:
+  IMAGE: quay.io/eclipse/che-plugin-registry
+
 jobs:
   release-build-publish:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64,arm64,ppc64le,s390x]
+    outputs:
+      amd64: ${{ steps.result.outputs.amd64 }}
+      arm64: ${{ steps.result.outputs.arm64 }}
+      ppc64le: ${{ steps.result.outputs.ppc64le }}
+      s390x: ${{ steps.result.outputs.s390x }}
     steps:
       - name: Clone source code
         uses: actions/checkout@v2
         with:
           fetch-depth: 0
+<<<<<<< HEAD
       - name: Check existing tags
         run: |
           set +e
@@ -45,16 +58,26 @@ jobs:
           else
             echo "[INFO] No existing tags detected for $VERSION"
           fi
+=======
+
+      - name: "Set up QEMU"
+        uses: docker/setup-qemu-action@v1
+
+      - name: "Set up Docker Buildx ${{ matrix.arch }}"
+        uses: docker/setup-buildx-action@v1
+
+>>>>>>> 0ba2a36... Adds multiarch support in GA
       - name: Login to Quay.io
-        uses: azure/docker-login@v1
+        uses: docker/login-action@v1
         with:
-          login-server: quay.io
+          registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Login to Docker Hub
-        uses: azure/docker-login@v1
+        uses: docker/login-action@v1
         with:
+          registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
@@ -82,19 +105,101 @@ jobs:
           restore-keys: |
             download-unpacked-cache-
 
-      - name: Perform release
+      - name: image-build
+        run: |
+          docker pull quay.io/eclipse/che-plugin-registry:nightly
+          BUILDER=docker SKIP_FORMAT=true SKIP_LINT=true SKIP_TEST=true ./build.sh --tag ${{ github.event.inputs.version }} --platform ${{ matrix.arch }} --buildx
+
+      - id: result
+        name: "Build result outputs version"
+        if: ${{ success() }}
+        run: echo "::set-output name=${{ matrix.arch }}::${{ github.event.inputs.version }}-${{ matrix.arch }}"
+
+  create-manifest:
+    needs: release-build-publish
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: "Checkout source code"
+        uses: actions/checkout@v1
+        with:
+          fetch-depth: 0
+      - 
+        name: Prepare
+        id: prep
+        run: |
+          SHORT_SHA1=$(git rev-parse --short HEAD)
+          echo ::set-output name=short_sha1::${SHORT_SHA1}
+
+      - name: Login to Quay.io
+        uses: docker/login-action@v1
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      -
+        name: "Create and push manifest"
+        run: |
+          AMD64_VERSION="${{ needs['release-build-publish'].outputs.amd64 }}"
+          ARM64_VERSION="${{ needs['release-build-publish'].outputs.arm64 }}"
+          PPC64LE_VERSION="${{ needs['release-build-publish'].outputs.ppc64le }}"
+          S390X_VERSION="${{ needs['release-build-publish'].outputs.s390x }}"
+          if [[ -z "$AMD64_VERSION" || \
+              -z "$ARM64_VERSION" || \
+              -z "$PPC64LE_VERSION" || \
+              -z "$S390X_VERSION" ]]; then
+              echo "[!] The job 'release-build-publish' fails on some of the architectures. Can't create complete manifest.";
+              exit 1;
+          fi
+          AMEND=""
+          AMEND+=" --amend ${{ env.IMAGE }}:$AMD64_VERSION";
+          AMEND+=" --amend ${{ env.IMAGE }}:$ARM64_VERSION";
+          AMEND+=" --amend ${{ env.IMAGE }}:$PPC64LE_VERSION";
+          AMEND+=" --amend ${{ env.IMAGE }}:$S390X_VERSION";
+          docker manifest create ${{ env.IMAGE }}:${{ github.event.inputs.version }} $AMEND
+          docker manifest push ${{ env.IMAGE }}:${{ github.event.inputs.version }}
+          docker manifest create ${{ env.IMAGE }}:${{ steps.prep.outputs.short_sha1 }} $AMEND
+          docker manifest push ${{ env.IMAGE }}:${{ steps.prep.outputs.short_sha1 }}
+      -
+        id: result
+        name: "Manifest result"
+        if: ${{ success() }}
+        run: echo "Manifest was created and pushed successfully"
+
+  tag-release:
+    needs: create-manifest
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: "Checkout source code"
+        uses: actions/checkout@v1
+        with:
+          fetch-depth: 0
+      - name: Tag release
         run: |
           git config --global user.name "Mykhailo Kuznietsov"
           git config --global user.email "mkuznets@redhat.com"
 
           export GITHUB_TOKEN=${{ secrets.CHE_BOT_GITHUB_TOKEN }}
 
+<<<<<<< HEAD
           ./make-release.sh --version ${{ github.event.inputs.version}} --trigger-release
       - name: Create failure MM message
         if: ${{ failure() }}
         run: |
           echo "{\"text\":\":building_construction: Che Plugin Registry ${{ github.event.inputs.version }} release has failed: https://github.com/eclipse/che-plugin-registry/actions/workflows/release.yml\"}" > mattermost.json
       - name: Create success MM message
+=======
+          ./make-release.sh --version ${{ github.event.inputs.version}} --tag-release
+      - name: Create MM message
+>>>>>>> 0ba2a36... Adds multiarch support in GA
         run: |
           echo "{\"text\":\":building_construction: Che Plugin Registry ${{ github.event.inputs.version }} has been released: https://quay.io/eclipse/che-plugin-registry:${{ github.event.inputs.version }}\"}" > mattermost.json
       - name: Send MM message
